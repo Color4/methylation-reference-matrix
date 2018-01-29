@@ -1,0 +1,4 @@
+pandas
+functools32
+argparse
+numpy
