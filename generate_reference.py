@@ -11,55 +11,69 @@ import argparse
 import numpy as np
 
 
-def parse_file_list(file_list):
+def parse_input(input_file):
 
-    files = {}
     to_clean = {}
     cleaned = {}
 
-    with open(file_list) as f:
-        for line in f:
-            split_line = line.split("\t")
-            if split_line[1].upper() == "YES":
-                to_clean[split_line[0]] = split_line[1:]
+    try:
+        if os.path.getsize(input_file) > 0:
+            with open(input_file, "r") as f:
+                for line in f:
+                    split_line = line.strip("\n").split("\t")
+                    if split_line[1].strip(" ").upper() == "YES":
+                        to_clean[split_line[0]] = return_geo_names(split_line)
+                    else:
+                        cleaned[split_line[0]] = return_geo_names(split_line)
+
+            return to_clean, cleaned
+
+    except Exception:
+        print("File input not correct. Please check input.")
+        raise
 
 
-def return_GEO_names(split_line):
+def return_geo_names(split_line):
 
     geo = []
     if len(split_line) > 2:
         for i in range(2, len(split_line)):
             geo.append(split_line[i])
     else:
-        return None
+        return []
     return geo
 
 
+def check_file_exists(input, should_exist):
+    if should_exist:
+        for file in input:
+            if not os.path.exists(file) or os.path.getsize(file) == 0:
+                raise FileNotFoundError
+    else:
+        try:
+            os.remove(input)
+        except OSError:
+            pass
 
-def check_file_exists(file_list):
-    for file in file_list:
-        if not os.path.exists(file):
-            raise FileNotFoundError("ERROR " + file + "not found. Please check your input file list.")
 
-    if os.path.exists("reference_matrix.txt"):
-        os.remove("reference_matrix.txt")
+def generate_clean_file(unclean_files):
 
-
-def make_clean_file(file_list):
-
-    clean_file_list = []
-    for file in file_list:
-        with open(file) as f:
+    new_files = {}
+    if unclean_files:
+        check_file_exists(unclean_files.keys(), True)
+        for file in unclean_files:
             clean_file_name = file.replace(".txt", "_cleaned.txt")
-            clean_file_list.append(clean_file_name)
             remove_metadata(clean_file_name, file)
+            new_files[clean_file_name] = unclean_files.get(file)
 
-    return clean_file_list
+        return new_files
+    else:
+        return {}
 
 
 def remove_metadata(clean_file, file):
 
-    os.system("rm -f " + clean_file)  # if a cleaned file exists, delete it and start fresh
+    check_file_exists(clean_file, False)  # if a cleaned file exists, delete it and start fresh
 
     try:
         # open file and remove the metadata. Print to a new file.
@@ -82,23 +96,40 @@ def remove_metadata(clean_file, file):
         print("File must include Sample_geo_accession and ID_REF lines")
 
 
-def intiate_merge(file_list):
+def merge_file_dicts(cleaned, newly_cleaned):
+    z = cleaned.copy()  # start with x's keys and values
+    z.update(newly_cleaned)  # modifies z with y's keys and values & returns None
+    return z
+
+
+def generate_merge(file_list):
 
     df_list = ["df_" + str(i) for i in range(len(file_list))]
 
-    for i in range(len(df_list)):
-        df_list[i] = load_df(df_list[i], file_list[i])
+    for i, file in zip(range(len(df_list)), file_list):
+        df_list[i] = load_df(df_list[i], file, file_list[file])
 
     return merge_df(df_list)
 
 
-def load_df(df, file):
+def load_df(df, file, geo_entries):
     try:
-        return round_df(pd.read_table(file, delimiter="\t"))
-
+        df = round_df(pd.read_table(file, delimiter="\t"))
+        return subset_df(df, geo_entries)
     except Exception:
         print("ERROR: unable to load data frame.")
         raise
+
+
+def subset_df(df, geo_entries):
+    if geo_entries:
+        for item in geo_entries:
+            if item not in list(df):
+                raise ValueError
+        geo_entries.append("!Sample_geo_accession")
+        return df[geo_entries]
+    else:
+        return df
 
 
 def round_df(df):
@@ -149,17 +180,13 @@ def generate_cpg_dict(illumina_file):
 if __name__ == "__main__":
 
     # parser = argparse.ArgumentParser()
-    # parser.add_argument("soft_file", type=str, help="txt file containing a list of soft matrix files to be merged")
+    # parser.add_argument("input_file", type=str, help="txt file containing a list of soft matrix files to be merged")
     # parser.add_argument("--non_standard", type=str, help="list of files not in soft matrix format")
     # args = parser.parse_args()
 
-    soft_file = "file_list.txt"
-
-    soft_file_list = [line.strip() for line in open(soft_file, 'r')]
-    check_file_exists(soft_file_list)
-
-    cleaned_file_list = make_clean_file(soft_file_list)
-    merged = intiate_merge(cleaned_file_list)
+    to_clean, cleaned = parse_input("file_list.txt")
+    all_clean_files = merge_file_dicts(cleaned, generate_clean_file(to_clean))
+    merged = generate_merge(all_clean_files)
 
     df_final = annotate_reference(merged, "HumanMethylationSites.txt")
     df_final.to_csv('reference_matrix.txt', sep="\t")
